@@ -77,8 +77,8 @@ The script transforms pixels into a fatigue analysis curve. The chart below, gen
 
 ## 👤 Author
 
-**[Samuel Caballero]**
+**Samuel Caballero**
 *Data Analyst & BI Specialist*
 
 Connecting the dots between physical performance and data science.
-* [LinkedIn Profile](Your_LinkedIn_Link)
+* [LinkedIn Profile](www.linkedin.com/in/samuelcablop)
