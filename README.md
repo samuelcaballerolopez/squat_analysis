@@ -59,7 +59,7 @@ This repository contains the evolution of the software, demonstrating the iterat
 ## 📊 Visual Outcomes
 
 The script transforms pixels into a fatigue analysis curve. The chart below, generated automatically by the pipeline, shows the correlation between repetition count and velocity loss (indicating fatigue).
-`![Velocity Analysis Chart](https://github.com/samuelcaballerolopez/squat_analysis/blob/main/line_chart.png?raw=true)`
+`![Velocity Analysis Chart](github.com/samuelcaballerolopez/squat_analysis/blob/main/line_chart.png?raw=true)`
 
 ---
 
