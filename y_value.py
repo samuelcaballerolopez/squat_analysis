@@ -4,74 +4,74 @@ import mediapipe as mp
 mp_drawing = mp.solutions.drawing_utils
 mp_pose = mp.solutions.pose
 
-PUNTO_INTERES = mp_pose.PoseLandmark.RIGHT_HIP
-ESPECIFICACION_PUNTO = mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=6, circle_radius=6)
+INTEREST_POINT = mp_pose.PoseLandmark.RIGHT_HIP
+DRAWING_SPEC = mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=6, circle_radius=6)
 
-x_anterior = 0
-y_anterior = 0
-sistema_iniciado = False
-conteo_frames = 0
+prev_x = 0
+prev_y = 0
+system_initialized = False
+frame_count = 0
 
-ALPHA_X_ESTABLE = 0.02
-ALPHA_Y_ESTABLE = 0.2
+ALPHA_X_STABLE = 0.02
+ALPHA_Y_STABLE = 0.2
 
-ALPHA_CALENTAMIENTO = 0.8
-FRAMES_DE_CALENTAMIENTO = 45
+ALPHA_WARMUP = 0.8
+WARMUP_FRAMES = 45
 
-def procesar_pose_inteligente(image, results):
-    global x_anterior, y_anterior, sistema_iniciado, conteo_frames
+def process_pose_smart(image, results):
+    global prev_x, prev_y, system_initialized, frame_count
     h, w, _ = image.shape
-    landmark = results.pose_landmarks.landmark[PUNTO_INTERES.value]
+    landmark = results.pose_landmarks.landmark[INTEREST_POINT.value]
     
-    x_cruda = landmark.x
-    y_cruda = landmark.y
-    visibilidad = landmark.visibility
+    raw_x = landmark.x
+    raw_y = landmark.y
+    visibility = landmark.visibility
     
-    if visibilidad > 0.5:
-        if not sistema_iniciado:
-            x_anterior = x_cruda
-            y_anterior = y_cruda
-            sistema_iniciado = True
-            x_suavizada, y_suavizada = x_cruda, y_cruda
-            color_punto = (0, 255, 255)
+    if visibility > 0.5:
+        if not system_initialized:
+            prev_x = raw_x
+            prev_y = raw_y
+            system_initialized = True
+            smooth_x, smooth_y = raw_x, raw_y
+            dot_color = (0, 255, 255)
             
         else:
-            if conteo_frames < FRAMES_DE_CALENTAMIENTO:
-                alpha_x = ALPHA_CALENTAMIENTO
-                alpha_y = ALPHA_CALENTAMIENTO
-                color_punto = (0, 255, 255)
+            if frame_count < WARMUP_FRAMES:
+                alpha_x = ALPHA_WARMUP
+                alpha_y = ALPHA_WARMUP
+                dot_color = (0, 255, 255)
             else:
-                alpha_x = ALPHA_X_ESTABLE
-                alpha_y = ALPHA_Y_ESTABLE
-                color_punto = (0, 255, 0)
+                alpha_x = ALPHA_X_STABLE
+                alpha_y = ALPHA_Y_STABLE
+                dot_color = (0, 255, 0)
 
-            x_suavizada = (alpha_x * x_cruda) + ((1 - alpha_x) * x_anterior)
-            y_suavizada = (alpha_y * y_cruda) + ((1 - alpha_y) * y_anterior)
+            smooth_x = (alpha_x * raw_x) + ((1 - alpha_x) * prev_x)
+            smooth_y = (alpha_y * raw_y) + ((1 - alpha_y) * prev_y)
             
-            x_anterior = x_suavizada
-            y_anterior = y_suavizada
+            prev_x = smooth_x
+            prev_y = smooth_y
 
-        cx = int(x_suavizada * w)
-        cy = int(y_suavizada * h)
+        cx = int(smooth_x * w)
+        cy = int(smooth_y * h)
         
         cv2.circle(image, (cx, cy), 8, (0, 0, 0), -1)      
-        cv2.circle(image, (cx, cy), 6, color_punto, -1)   
+        cv2.circle(image, (cx, cy), 6, dot_color, -1)   
 
-        texto_valor = f"Y: {y_suavizada:.2f}"
-        cv2.putText(image, texto_valor, (cx + 15, cy + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        text_value = f"Y: {smooth_y:.2f}"
+        cv2.putText(image, text_value, (cx + 15, cy + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
     return image
 
-VIDEO_ENTRADA = 'squat_2.mp4'
-VIDEO_SALIDA = 'y_squat_analisis.mp4'
+INPUT_VIDEO = 'your_video_mp4'
+OUTPUT_VIDEO = 'y_squat_analysis.mp4'
 
-cap = cv2.VideoCapture(VIDEO_ENTRADA)
+cap = cv2.VideoCapture(INPUT_VIDEO)
 if not cap.isOpened(): exit()
 
 w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 fps = int(cap.get(cv2.CAP_PROP_FPS))
-out = cv2.VideoWriter(VIDEO_SALIDA, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+out = cv2.VideoWriter(OUTPUT_VIDEO, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
 
 with mp_pose.Pose(
     min_detection_confidence=0.6,
@@ -84,7 +84,7 @@ with mp_pose.Pose(
         ret, frame = cap.read()
         if not ret: break
         
-        conteo_frames += 1
+        frame_count += 1
 
         image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image.flags.writeable = False
@@ -93,14 +93,14 @@ with mp_pose.Pose(
         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
         if results.pose_landmarks:
-            image = procesar_pose_inteligente(image, results)
+            image = process_pose_smart(image, results)
 
         out.write(image)
         
-        cv2.imshow('Analisis Final', image)
+        cv2.imshow('Final Analysis', image)
         if cv2.waitKey(1) & 0xFF == ord('q'): break
 
 cap.release()
 out.release()
 cv2.destroyAllWindows()
-print(f"Video guardado en: {VIDEO_SALIDA}")
+print(f"Video saved at: {OUTPUT_VIDEO}")
