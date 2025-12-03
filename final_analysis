@@ -1,0 +1,225 @@
+import cv2
+import mediapipe as mp
+import pandas as pd
+import matplotlib.pyplot as plt
+import math
+import time
+
+class OneEuroFilter:
+    def __init__(self, te, min_cutoff=1.0, beta=0.0, d_cutoff=1.0):
+        self._x = None
+        self._dx = 0
+        self._te = te
+        self._min_cutoff = min_cutoff
+        self._beta = beta
+        self._d_cutoff = d_cutoff
+        self._alpha = self._alpha_smoothing(self._min_cutoff)
+
+    def _alpha_smoothing(self, cutoff):
+        tau = 1.0 / (2 * math.pi * cutoff)
+        return 1.0 / (1.0 + tau / self._te)
+
+    def predict(self, x, te=None):
+        if te is not None:
+            self._te = te
+        
+        if self._x is None:
+            self._x = x
+            self._dx = 0
+            return x
+
+        a_d = self._alpha_smoothing(self._d_cutoff)
+        dx = (x - self._x) / self._te
+        dx_hat = a_d * dx + (1 - a_d) * self._dx
+
+        cutoff = self._min_cutoff + self._beta * abs(dx_hat)
+        a = self._alpha_smoothing(cutoff)
+
+        x_hat = a * x + (1 - a) * self._x
+
+        self._x = x_hat
+        self._dx = dx_hat
+        return x_hat
+
+mp_drawing = mp.solutions.drawing_utils
+mp_pose = mp.solutions.pose
+
+VIDEO_ENTRADA = 'squat_2.mp4'
+VIDEO_SALIDA = 'output_squat_analisis.mp4'
+ARCHIVO_EXCEL = 'analisis_concentrica.xlsx'
+
+UMBRAL_ALTA = 0.50
+UMBRAL_BAJA = 0.569
+
+REPS = 0
+ESTADO_REPETICION = 'Up'
+datos_repeticiones = []
+t_inicio_concentrica = 0
+
+sistema_iniciado = False
+conteo_frames = 0
+FRAMES_DE_CALENTAMIENTO = 45
+
+FRECUENCIA_FPS = 30.0
+FILTRO_CONFIG = {
+    'te': 1.0 / FRECUENCIA_FPS,
+    'min_cutoff': 0.5,
+    'beta': 0.05,
+    'd_cutoff': 1.0
+}
+
+filtro_x = None
+filtro_y = None
+
+PUNTO_INTERES = mp_pose.PoseLandmark.RIGHT_HIP
+
+def procesar_repeticion(y_cadera, tiempo_actual_video):
+    global REPS, ESTADO_REPETICION, t_inicio_concentrica, datos_repeticiones
+    
+    if conteo_frames < FRAMES_DE_CALENTAMIENTO:
+        return
+
+    if y_cadera > UMBRAL_BAJA and ESTADO_REPETICION == 'Up':
+        ESTADO_REPETICION = 'Down'
+        t_inicio_concentrica = tiempo_actual_video
+        print(f"--> FONDO ALCANZADO ({y_cadera:.2f})")
+    
+    elif y_cadera < UMBRAL_ALTA and ESTADO_REPETICION == 'Down':
+        ESTADO_REPETICION = 'Up'
+        REPS += 1
+        duracion = tiempo_actual_video - t_inicio_concentrica
+        
+        datos_repeticiones.append({
+            'Repeticion': REPS,
+            'Concentrica': round(duracion, 2)
+        })
+        print(f"REP {REPS}: Tiempo Subida {duracion:.2f}s")
+
+def procesar_pose_inteligente(image, results, tiempo_video):
+    global sistema_iniciado, conteo_frames, filtro_x, filtro_y
+    h, w, _ = image.shape
+    
+    y_baja_px = int(UMBRAL_BAJA * h)
+    y_alta_px = int(UMBRAL_ALTA * h)
+    cv2.line(image, (0, y_baja_px), (w, y_baja_px), (0, 0, 255), 1)
+    cv2.line(image, (0, y_alta_px), (w, y_alta_px), (0, 255, 0), 1)
+
+    landmark = results.pose_landmarks.landmark[PUNTO_INTERES.value]
+    
+    x_cruda = landmark.x
+    y_cruda = landmark.y
+    visibilidad = landmark.visibility
+    
+    if visibilidad > 0.5:
+        if filtro_x is None:
+            filtro_x = OneEuroFilter(**FILTRO_CONFIG)
+            filtro_y = OneEuroFilter(**FILTRO_CONFIG)
+            filtro_x.predict(x_cruda)
+            filtro_y.predict(y_cruda)
+            sistema_iniciado = True
+        
+        x_suavizada = filtro_x.predict(x_cruda)
+        y_suavizada = filtro_y.predict(y_cruda)
+
+        if conteo_frames < FRAMES_DE_CALENTAMIENTO:
+             color_punto = (0, 255, 255)
+        else:
+             color_punto = (0, 255, 0)
+
+        cx = int(x_suavizada * w)
+        cy = int(y_suavizada * h)
+        
+        cv2.circle(image, (cx, cy), 8, (0, 0, 0), -1)
+        cv2.circle(image, (cx, cy), 6, color_punto, -1)   
+
+        cv2.putText(image, f"Y: {y_suavizada:.2f}", (cx + 15, cy + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        procesar_repeticion(y_suavizada, tiempo_video)
+
+    return image
+
+cap = cv2.VideoCapture(VIDEO_ENTRADA)
+if not cap.isOpened():
+    print("Error al abrir video")
+    exit()
+
+w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+fps = int(cap.get(cv2.CAP_PROP_FPS))
+if fps == 0: fps = 30
+
+FILTRO_CONFIG['te'] = 1.0 / fps
+
+out = cv2.VideoWriter(VIDEO_SALIDA, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+
+with mp_pose.Pose(
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5,
+    model_complexity=2,
+    smooth_landmarks=True
+    ) as pose:
+
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret: break
+        
+        conteo_frames += 1
+        tiempo_video = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+
+        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        image.flags.writeable = False
+        results = pose.process(image)
+        image.flags.writeable = True
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        
+        if results.pose_landmarks:
+            image = procesar_pose_inteligente(image, results, tiempo_video)
+        else:
+            y_baja_px = int(UMBRAL_BAJA * h)
+            y_alta_px = int(UMBRAL_ALTA * h)
+            cv2.line(image, (0, y_baja_px), (w, y_baja_px), (0, 0, 255), 1) 
+            cv2.line(image, (0, y_alta_px), (w, y_alta_px), (0, 255, 0), 1)
+
+        cv2.rectangle(image, (0, 0), (250, 80), (0, 0, 0), -1)
+        cv2.putText(image, f'REPS: {REPS}', (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        
+        if datos_repeticiones:
+            ultimo = datos_repeticiones[-1]
+            cv2.putText(image, f"Con: {ultimo['Concentrica']}s", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1)
+
+        out.write(image)
+
+    if datos_repeticiones:
+        df = pd.DataFrame(datos_repeticiones)
+        
+        try:
+            df.to_excel(ARCHIVO_EXCEL, index=False, engine='openpyxl')
+            print(f"Datos exportados a {ARCHIVO_EXCEL}")
+        except ModuleNotFoundError:
+            print("Falta openpyxl. Guardando en CSV...")
+            df.to_csv('backup_datos.csv', index=False)
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(df['Repeticion'], df['Concentrica'], marker='o', linewidth=2, color='b')
+        
+        plt.xticks(df['Repeticion'])
+        
+        max_tiempo = df['Concentrica'].max()
+        plt.ylim(0, max_tiempo * 1.5) 
+        
+        for x, y in zip(df['Repeticion'], df['Concentrica']):
+            plt.text(x, y + (max_tiempo*0.05), f'{y}s', ha='center', color='blue')
+
+        plt.title('Velocidad de Subida')
+        plt.xlabel('Repetición')
+        plt.ylabel('Segundos')
+        plt.grid(axis='y', linestyle='--', alpha=0.7) 
+        
+        plt.savefig('grafico_concentrica.png')
+        print(f"Proceso terminado. Video guardado en: {VIDEO_SALIDA}")
+    else:
+        print("No se completaron repeticiones.")
+
+cap.release()
+out.release()
+cv2.destroyAllWindows()
